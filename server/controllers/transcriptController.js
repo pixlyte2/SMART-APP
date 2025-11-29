@@ -1,8 +1,9 @@
-// controllers/transcriptController.js
+const fs = require("fs");
 const { extractTranscript } = require("../services/transcriptService");
 const User = require("../models/users");
+const { runWhisper } = require("../utils/runWhisper");
 
-// URL validator
+// Validate URL
 function isValidHttpUrl(string) {
   try {
     const url = new URL(string);
@@ -12,48 +13,78 @@ function isValidHttpUrl(string) {
   }
 }
 
-const transcribe = async (req, res) => {
+// MAIN TRANSCRIBE CONTROLLER
+exports.transcribe = async (req, res) => {
   const { url } = req.body;
 
-  if (!url) return res.status(400).json({ error: "URL missing" });
-  if (!isValidHttpUrl(url)) return res.status(400).json({ error: "Invalid URL" });
-
-  console.log("POST /api/transcribe", url);
-
-  try {
-    const transcript = await extractTranscript(url);
-
-    console.log("Transcript length:", transcript.length);
-
-    // Save history (non-blocking)
-    if (req.user?.id) {
-      (async () => {
-        try {
-          const user = await User.findById(req.user.id);
-          if (user) {
-            user.history.push({
-              action: "/api/transcribe",
-              url,
-              date: new Date(),
-            });
-            await user.save();
-            console.log("History saved for:", req.user.id);
-          }
-        } catch (err) {
-          console.error("History save failed:", err);
-        }
-      })();
+  // --- Case 1: YouTube URL transcript ---
+  if (url) {
+    if (!isValidHttpUrl(url)) {
+      return res.status(400).json({ error: "Invalid URL" });
     }
+
+    console.log("POST /api/transcribe (YouTube URL)", url);
+
+    try {
+      // Extract transcript from YouTube
+      const transcript = await extractTranscript(url);
+
+      console.log("Transcript length:", transcript.length);
+
+      // Save history (non-blocking)
+      saveHistory(req.user, "/api/transcribe", url);
+
+      return res.json({ transcript });
+    } catch (err) {
+      console.error("Transcription error:", err.message);
+
+      return res.status(500).json({
+        error: "Transcription failed. Check server logs.",
+        details: err.message,
+      });
+    }
+  }
+
+  // --- Case 2: Whisper local audio transcription ---
+  try {
+    console.log("POST /api/transcribe (Whisper Audio)");
+
+    const audioFile = req.tempAudioPath; // added from downloader middleware
+    if (!audioFile) {
+      return res.status(400).json({ error: "Audio file missing" });
+    }
+
+    const txtFile = await runWhisper(audioFile);
+    const transcript = fs.readFileSync(txtFile, "utf8");
+
+    // Save history
+    saveHistory(req.user, "/api/transcribe", audioFile);
 
     return res.json({ transcript });
   } catch (err) {
-    console.error("Transcription error:", err.message);
-
-    return res.status(500).json({
-      error: "Transcription failed. Check server logs.",
-      details: err.message,
-    });
+    console.error("Whisper error:", err);
+    res.status(500).json({ error: "Whisper failed" });
   }
 };
 
-module.exports = { transcribe };
+// SAVE USER HISTORY
+async function saveHistory(userObj, action, url) {
+  if (!userObj?.id) return;
+
+  (async () => {
+    try {
+      const user = await User.findById(userObj.id);
+      if (user) {
+        user.history.push({
+          action,
+          url,
+          date: new Date(),
+        });
+        await user.save();
+        console.log("History saved for:", userObj.id);
+      }
+    } catch (err) {
+      console.error("History save failed:", err);
+    }
+  })();
+}
