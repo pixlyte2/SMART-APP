@@ -1,20 +1,16 @@
-const { execFile } = require("child_process");
+const { exec } = require("child_process");
 const path = require("path");
 
 exports.runWhisper = (audioPath) => {
   return new Promise((resolve, reject) => {
-    const whisperExe = "C:\\path\\to\\whisper.exe";   // <-- change path
-    const modelPath = "C:\\path\\to\\models\\ggml-base.bin";
+    const pythonFile = path.join(__dirname, "../python/asr.py");
 
-    execFile(
-      whisperExe,
-      ["-m", modelPath, "-f", audioPath, "-otxt"],
-      { shell: false },
+    exec(`python "${pythonFile}" "${audioPath}"`,
+      { maxBuffer: 1024 * 1024 * 5 },
       (err, stdout, stderr) => {
-        if (err) return reject(err);
+        if (err) return reject("Whisper failed: " + err.message);
 
-        const outputFile = audioPath + ".txt";
-        resolve(outputFile);
+        resolve(stdout.trim());
       }
     );
   });
